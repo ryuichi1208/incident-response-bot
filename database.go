@@ -382,6 +382,48 @@ func getUpdateHistory(incidentID int64, limit int) ([]map[string]interface{}, er
 	return history, nil
 }
 
+// getOpenIncidents はオープンなインシデント一覧を取得（タイムキーパー復元用）
+func getOpenIncidents() ([]map[string]interface{}, error) {
+	if db == nil {
+		return nil, fmt.Errorf("データベース接続が初期化されていません")
+	}
+
+	query := `
+		SELECT id, channel_id, created_at
+		FROM incidents
+		WHERE status = 'open'
+		ORDER BY created_at ASC
+	`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("オープンなインシデント取得エラー: %v", err)
+	}
+	defer rows.Close()
+
+	var incidents []map[string]interface{}
+	for rows.Next() {
+		var id int64
+		var channelID string
+		var createdAt time.Time
+
+		err := rows.Scan(&id, &channelID, &createdAt)
+		if err != nil {
+			log.Printf("インシデント情報スキャンエラー: %v", err)
+			continue
+		}
+
+		incident := map[string]interface{}{
+			"id":         id,
+			"channel_id": channelID,
+			"created_at": createdAt,
+		}
+		incidents = append(incidents, incident)
+	}
+
+	return incidents, nil
+}
+
 // resolveIncident はインシデントを復旧済みにする
 func resolveIncident(incidentID int64, resolvedBy, resolvedByName string) error {
 	if db == nil {

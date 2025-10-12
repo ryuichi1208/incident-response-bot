@@ -240,10 +240,19 @@ func postIncidentActionsButton(api *slack.Client, channelID string, incidentID i
 		Deny:    slack.NewTextBlockObject("plain_text", "キャンセル", false, false),
 	}
 
+	// タイムキーパー停止ボタン
+	stopTimekeeperButton := slack.NewButtonBlockElement(
+		"stop_timekeeper",
+		fmt.Sprintf("incident_%d", incidentID),
+		slack.NewTextBlockObject("plain_text", "⏹️ タイムキーパー停止", true, false),
+	)
+	stopTimekeeperButton.Style = "danger"
+
 	actionBlock := slack.NewActionBlock(
 		fmt.Sprintf("incident_actions_%d", incidentID),
 		updateButton,
 		resolveButton,
+		stopTimekeeperButton,
 	)
 
 	headerText := slack.NewTextBlockObject("mrkdwn", "インシデント情報を管理:", false, false)
@@ -352,6 +361,12 @@ func handleResolveIncident(api *slack.Client, callback slack.InteractionCallback
 	}
 	emoji := severityEmoji[details["severity"].(string)]
 
+	// チャンネルメンバーを取得（対応メンバー一覧）
+	contributors, err := getChannelContributors(api, callback.Channel.ID)
+	if err != nil {
+		log.Printf("対応メンバー取得エラー: %v", err)
+	}
+
 	// 復旧メッセージを構築
 	resolveMessage := fmt.Sprintf(
 		"✅ *インシデントが復旧しました*\n\n"+
@@ -368,6 +383,11 @@ func handleResolveIncident(api *slack.Client, callback slack.InteractionCallback
 		incidentID,
 		callback.Channel.ID,
 	)
+
+	// 対応メンバー一覧を追加
+	if len(contributors) > 0 {
+		resolveMessage += fmt.Sprintf("\n\n👥 *対応メンバー:* %s", contributors)
+	}
 
 	// インシデントチャンネルに復旧メッセージを投稿（緑の縦棒）
 	attachment := slack.Attachment{
@@ -391,6 +411,47 @@ func handleResolveIncident(api *slack.Client, callback slack.InteractionCallback
 	if config.Channels.EnableAnnouncement && len(config.Channels.AnnouncementChannels) > 0 {
 		log.Println("全体周知チャンネルに復旧通知を送信します")
 		postResolveToAnnouncementChannels(api, resolveMessage, callback.Channel.ID)
+	}
+
+	// タイムキーパーを自動停止
+	if timekeeperManager.stopTimekeeper(incidentID) {
+		log.Printf("インシデント %d のタイムキーパーを自動停止しました", incidentID)
+	}
+}
+
+// handleStopTimekeeper はタイムキーパー停止ボタンがクリックされた時の処理
+func handleStopTimekeeper(api *slack.Client, callback slack.InteractionCallback) {
+	log.Println("タイムキーパー停止ボタンがクリックされました")
+
+	// ボタンのValueからインシデントIDを取得
+	action := callback.ActionCallback.BlockActions[0]
+	var incidentID int64
+	_, err := fmt.Sscanf(action.Value, "incident_%d", &incidentID)
+	if err != nil {
+		log.Printf("インシデントID解析エラー: %v", err)
+		return
+	}
+
+	// タイムキーパーを停止
+	if timekeeperManager.stopTimekeeper(incidentID) {
+		successMessage := fmt.Sprintf("⏹️ インシデント #%d のタイムキーパーを停止しました", incidentID)
+		_, _, err := api.PostMessage(
+			callback.Channel.ID,
+			slack.MsgOptionText(successMessage, false),
+		)
+
+		if err != nil {
+			log.Printf("停止メッセージ投稿エラー: %v", err)
+		} else {
+			log.Printf("インシデント %d のタイムキーパーを手動停止しました", incidentID)
+		}
+	} else {
+		// 既に停止している場合
+		api.PostEphemeral(
+			callback.Channel.ID,
+			callback.User.ID,
+			slack.MsgOptionText("ℹ️ タイムキーパーは既に停止しています。", false),
+		)
 	}
 }
 
@@ -471,6 +532,102 @@ func postResolveToAnnouncementChannels(api *slack.Client, message string, incide
 			log.Printf("全体周知チャンネル %s への復旧通知投稿エラー: %v", channelID, err)
 		} else {
 			log.Printf("全体周知チャンネル %s に復旧通知を投稿しました", channelID)
+		}
+	}
+}
+
+// getChannelContributors はチャンネルでメッセージを投稿したユーザー一覧を取得
+func getChannelContributors(api *slack.Client, channelID string) (string, error) {
+	log.Printf("チャンネル %s の対応メンバーを取得中...", channelID)
+
+	// チャンネルの会話履歴を取得（最大1000件）
+	params := &slack.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Limit:     1000,
+	}
+
+	history, err := api.GetConversationHistory(params)
+	if err != nil {
+		log.Printf("会話履歴取得エラー: %v", err)
+		return "", fmt.Errorf("会話履歴取得エラー: %v", err)
+	}
+
+	log.Printf("取得したメッセージ数: %d", len(history.Messages))
+
+	// ユニークなユーザーIDを収集（Botは除外）
+	userSet := make(map[string]bool)
+	botCount := 0
+	userCount := 0
+
+	for _, msg := range history.Messages {
+		log.Printf("メッセージ - User: %s, BotID: %s, SubType: %s", msg.User, msg.BotID, msg.SubType)
+
+		// Botのメッセージはスキップ
+		if msg.BotID != "" || msg.SubType == "bot_message" {
+			botCount++
+			continue
+		}
+
+		// ユーザーIDがある場合のみ追加
+		if msg.User != "" {
+			userSet[msg.User] = true
+			userCount++
+		}
+	}
+
+	log.Printf("Bot メッセージ: %d, ユーザーメッセージ: %d", botCount, userCount)
+
+	// ユーザーIDをスライスに変換
+	var userIDs []string
+	for userID := range userSet {
+		userIDs = append(userIDs, userID)
+		log.Printf("対応メンバー: %s", userID)
+	}
+
+	log.Printf("対応メンバー %d 人を検出しました", len(userIDs))
+
+	// メンション形式に変換
+	if len(userIDs) == 0 {
+		log.Println("対応メンバーが0人のため、空文字列を返します")
+		return "", nil
+	}
+
+	var mentions []string
+	for _, userID := range userIDs {
+		mentions = append(mentions, fmt.Sprintf("<@%s>", userID))
+	}
+
+	result := strings.Join(mentions, ", ")
+	log.Printf("対応メンバー文字列: %s", result)
+
+	return result, nil
+}
+
+// handleChannelArchive はチャンネルアーカイブ時の処理
+func handleChannelArchive(api *slack.Client, event *slackevents.ChannelArchiveEvent) {
+	log.Printf("チャンネルアーカイブイベントを受信しました: %s", event.Channel)
+
+	// チャンネルがインシデントチャンネルかどうかを確認
+	incidentID, title, err := getIncidentByChannelID(event.Channel)
+	if err != nil {
+		log.Printf("アーカイブされたチャンネル %s にはオープンなインシデントがありません: %v", event.Channel, err)
+		return
+	}
+
+	log.Printf("インシデント %d (%s) のチャンネルがアーカイブされました", incidentID, title)
+
+	// タイムキーパーを停止
+	if timekeeperManager.stopTimekeeper(incidentID) {
+		log.Printf("インシデント %d のタイムキーパーを自動停止しました（チャンネルアーカイブ）", incidentID)
+	}
+
+	// インシデントを自動的に復旧済みにする
+	if db != nil {
+		err := resolveIncident(incidentID, "system", "システム（チャンネルアーカイブ）")
+		if err != nil {
+			log.Printf("インシデント %d の自動復旧エラー: %v", incidentID, err)
+		} else {
+			log.Printf("インシデント %d を自動的に復旧済みにしました（チャンネルアーカイブ）", incidentID)
 		}
 	}
 }

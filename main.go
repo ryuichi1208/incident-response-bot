@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -47,6 +48,26 @@ func main() {
 		slack.OptionDebug(true),
 		slack.OptionLog(log.New(os.Stdout, "slack-bot: ", log.Lshortfile|log.LstdFlags)),
 	)
+
+	// オープンなインシデントのタイムキーパーを復元
+	if db != nil {
+		openIncidents, err := getOpenIncidents()
+		if err != nil {
+			log.Printf("オープンなインシデント取得エラー: %v", err)
+		} else if len(openIncidents) > 0 {
+			log.Printf("オープンなインシデント %d 件のタイムキーパーを復元します", len(openIncidents))
+			for _, incident := range openIncidents {
+				incidentID := incident["id"].(int64)
+				channelID := incident["channel_id"].(string)
+				createdAt := incident["created_at"].(time.Time)
+
+				timekeeperManager.startTimekeeper(api, incidentID, channelID, createdAt)
+				log.Printf("インシデント %d のタイムキーパーを復元しました (開始時刻: %v)", incidentID, createdAt)
+			}
+		} else {
+			log.Println("復元するオープンなインシデントはありません")
+		}
+	}
 
 	// Socket Modeクライアントの作成
 	client := socketmode.New(
@@ -94,6 +115,9 @@ func main() {
 					case *slackevents.AppMentionEvent:
 						// メンション受信時の処理
 						handleAppMention(api, ev)
+					case *slackevents.ChannelArchiveEvent:
+						// チャンネルアーカイブ時の処理
+						handleChannelArchive(api, ev)
 					}
 				}
 
@@ -123,6 +147,8 @@ func main() {
 							handleUpdateIncident(api, callback)
 						case "resolve_incident":
 							handleResolveIncident(api, callback)
+						case "stop_timekeeper":
+							handleStopTimekeeper(api, callback)
 						}
 					}
 				case slack.InteractionTypeViewSubmission:

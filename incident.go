@@ -205,6 +205,10 @@ func handleModalSubmission(api *slack.Client, callback slack.InteractionCallback
 		// 作成したチャンネルに報告を投稿
 		log.Printf("インシデントチャンネル %s に報告を投稿します", incidentChannel.ID)
 		postIncidentToChannel(api, incidentChannel.ID, reportMessage, channelID, incidentID)
+
+		// タイムキーパーを開始
+		timekeeperManager.startTimekeeper(api, incidentID, incidentChannel.ID, time.Now())
+		log.Printf("インシデント %d のタイムキーパーを開始しました", incidentID)
 	}
 
 	// 全体周知チャンネルへの投稿
