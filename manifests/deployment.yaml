@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-response-bot
+  labels:
+    app: incident-response-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-response-bot
+  template:
+    metadata:
+      labels:
+        app: incident-response-bot
+    spec:
+      containers:
+      - name: incident-bot
+        image: ryuichi1208/incident-response-bot:latest
+        imagePullPolicy: Always
+        env:
+        - name: SLACK_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: slack-secrets
+              key: bot-token
+        - name: SLACK_APP_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: slack-secrets
+              key: app-token
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: incident-bot-config
+              key: db-host
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: incident-bot-config
+              key: db-port
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secrets
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secrets
+              key: password
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: incident-bot-config
+              key: db-name
+        - name: DB_SSLMODE
+          valueFrom:
+            configMapKeyRef:
+              name: incident-bot-config
+              key: db-sslmode
+        - name: TZ
+          value: "Asia/Tokyo"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pgrep -f incident-bot
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pgrep -f incident-bot
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      restartPolicy: Always
