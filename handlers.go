@@ -244,7 +244,7 @@ func postIncidentActionsButton(api *slack.Client, channelID string, incidentID i
 	stopTimekeeperButton := slack.NewButtonBlockElement(
 		"stop_timekeeper",
 		fmt.Sprintf("incident_%d", incidentID),
-		slack.NewTextBlockObject("plain_text", "⏹️ タイムキーパー停止", true, false),
+		slack.NewTextBlockObject("plain_text", "⏹️ タイムキーパーを止める", true, false),
 	)
 	stopTimekeeperButton.Style = "danger"
 

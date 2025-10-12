@@ -62,17 +62,27 @@ func (tm *TimekeeperManager) startTimekeeper(api *slack.Client, incidentID int64
 				}
 
 				// 経過時間メッセージを投稿
-				message := fmt.Sprintf("⏱️ *インシデント経過時間:* %s\n*インシデントID:* #%d", elapsedStr, incidentID)
+				message := fmt.Sprintf("⏱️ *インシデント経過時間:* %s", elapsedStr)
+
+				// 停止ボタンを作成
+				stopButton := slack.NewButtonBlockElement(
+					"stop_timekeeper",
+					fmt.Sprintf("incident_%d", incidentID),
+					slack.NewTextBlockObject("plain_text", "⏹️ タイムキーパーを止める", true, false),
+				)
+				stopButton.Style = "danger"
+
+				// メッセージブロックを作成（テキストとボタンを横並び）
+				textSection := slack.NewSectionBlock(
+					slack.NewTextBlockObject("mrkdwn", message, false, false),
+					nil,
+					slack.NewAccessory(stopButton),
+				)
 
 				_, _, err := api.PostMessage(
 					channelID,
 					slack.MsgOptionText(message, false),
-					slack.MsgOptionBlocks(
-						slack.NewSectionBlock(
-							slack.NewTextBlockObject("mrkdwn", message, false, false),
-							nil, nil,
-						),
-					),
+					slack.MsgOptionBlocks(textSection),
 				)
 
 				if err != nil {

@@ -153,7 +153,7 @@ func handleModalSubmission(api *slack.Client, callback slack.InteractionCallback
 		channelID = callback.User.ID
 	}
 
-	_, _, err := api.PostMessage(
+	_, msgTimestamp, err := api.PostMessage(
 		channelID,
 		slack.MsgOptionText(reportMessage, false),
 		slack.MsgOptionBlocks(
@@ -170,6 +170,27 @@ func handleModalSubmission(api *slack.Client, callback slack.InteractionCallback
 	}
 
 	log.Println("インシデント報告をチャンネルに投稿しました")
+
+	// メッセージリンクを生成
+	var messageLink string
+	if msgTimestamp != "" {
+		// Slackのメッセージリンクはタイムスタンプからピリオドを削除して生成
+		// 形式: https://workspace.slack.com/archives/CHANNEL_ID/pTIMESTAMP
+		timestampForLink := strings.Replace(msgTimestamp, ".", "", -1)
+		messageLink = fmt.Sprintf("https://slack.com/archives/%s/p%s", channelID, timestampForLink)
+		log.Printf("メッセージリンク: %s", messageLink)
+	}
+
+	// 全体周知チャンネルにも即座に報告を投稿（メッセージリンク付き）
+	if config.Channels.EnableAnnouncement && len(config.Channels.AnnouncementChannels) > 0 {
+		log.Println("全体周知チャンネルにインシデント報告を投稿します")
+		// 報告元リンクを追加
+		reportMessageWithLink := reportMessage
+		if messageLink != "" {
+			reportMessageWithLink += fmt.Sprintf("\n\n📍 *インシデントは<#%s>の<%s|こちら>で報告されました*", channelID, messageLink)
+		}
+		postToAnnouncementChannels(api, reportMessageWithLink, "", severity)
+	}
 
 	// インシデント対応用チャンネルを作成
 	incidentChannel, err := createIncidentChannel(api, title, callback.User.ID)
@@ -211,19 +232,23 @@ func handleModalSubmission(api *slack.Client, callback slack.InteractionCallback
 		log.Printf("インシデント %d のタイムキーパーを開始しました", incidentID)
 	}
 
-	// 全体周知チャンネルへの投稿
-	log.Printf("全体周知チャンネルへの投稿チェック: enable=%v, channels=%d",
-		config.Channels.EnableAnnouncement, len(config.Channels.AnnouncementChannels))
-
-	if config.Channels.EnableAnnouncement && len(config.Channels.AnnouncementChannels) > 0 {
-		log.Println("全体周知チャンネルへの投稿を開始します")
-		postToAnnouncementChannels(api, reportMessage, incidentChannelID, severity)
-	} else {
-		if !config.Channels.EnableAnnouncement {
-			log.Println("全体周知機能が無効になっています")
-		}
-		if len(config.Channels.AnnouncementChannels) == 0 {
-			log.Println("全体周知チャンネルが設定されていません")
+	// インシデントチャンネル作成後に、チャンネルリンク付きで全体周知を更新
+	if config.Channels.EnableAnnouncement && len(config.Channels.AnnouncementChannels) > 0 && incidentChannelID != "" {
+		log.Println("全体周知チャンネルにインシデントチャンネル情報を追加投稿します")
+		channelLinkMessage := fmt.Sprintf("📋 *インシデント対応チャンネル:* <#%s>", incidentChannelID)
+		for _, announcementChannelID := range config.Channels.AnnouncementChannels {
+			if announcementChannelID == "" {
+				continue
+			}
+			_, _, err := api.PostMessage(
+				announcementChannelID,
+				slack.MsgOptionText(channelLinkMessage, false),
+			)
+			if err != nil {
+				log.Printf("全体周知チャンネル %s へのリンク投稿エラー: %v", announcementChannelID, err)
+			} else {
+				log.Printf("全体周知チャンネル %s にインシデントチャンネルリンクを投稿しました", announcementChannelID)
+			}
 		}
 	}
 }
@@ -546,47 +571,8 @@ func handleUpdateModalSubmission(api *slack.Client, callback slack.InteractionCa
 
 // postIncidentGuidelines はインシデント対応のガイドラインを投稿
 func postIncidentGuidelines(api *slack.Client, channelID string) {
-	guidelinesMessage := `📋 *インシデント対応のガイドライン*
-
-*1️⃣ 初動対応 (最初の5分)*
-• 影響範囲の確認
-• 関係者への通知
-• 暫定対応の検討
-
-*2️⃣ 原因調査*
-• ログの確認
-• エラーメッセージの収集
-• 最近の変更の確認
-• モニタリングダッシュボードの確認
-
-*3️⃣ 対応実施*
-• 対応方針の決定と共有
-• 実施前のバックアップ
-• 段階的な実施
-• 影響の確認
-
-*4️⃣ 復旧確認*
-• サービスの正常性確認
-• モニタリング指標の確認
-• ユーザー影響の確認
-
-*5️⃣ 事後対応*
-• インシデントレポートの作成
-• 再発防止策の検討
-• ポストモーテムの実施
-
----
-
-*🔗 役立つリンク*
-• モニタリングダッシュボード
-• ログ検索ツール
-• 障害対応手順書
-• エスカレーションフロー
-
-*💡 Tips*
-• このチャンネルで進捗を随時共有しましょう
-• 判断に迷ったら早めに相談しましょう
-• 作業は複数人でレビューしながら進めましょう`
+	// messages.goから取得
+	guidelinesMessage := GetIncidentGuidelines()
 
 	_, _, err := api.PostMessage(
 		channelID,
