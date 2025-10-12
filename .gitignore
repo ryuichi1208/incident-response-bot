@@ -43,3 +43,5 @@ postgres_data/
 
 # Logs
 *.log
+incident-bot
+incident-response-bot
