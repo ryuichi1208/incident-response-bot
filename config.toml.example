@@ -1,0 +1,29 @@
+# インシデントレスポンスボット設定ファイル
+
+[slack]
+# Slack Bot Token (xoxb-で始まるトークン)
+bot_token = "xoxb-your-bot-token-here"
+
+# Slack App Token (xapp-で始まるトークン、Socket Modeで必要)
+app_token = "xapp-your-app-token-here"
+
+[channels]
+# 全体周知チャンネルID のリスト (例: ["C1234567890", "C0987654321"])
+# インシデント報告がここにも投稿されます
+# チャンネルIDの確認方法: チャンネルを右クリック → チャンネルの詳細を表示 → 一番下にIDが表示されます
+# 複数のチャンネルに投稿したい場合は配列で指定
+announcement_channels = []
+
+# 全体周知チャンネルへの投稿を有効にするか (true/false)
+enable_announcement = false
+
+[database]
+# PostgreSQL接続情報
+# ローカル実行時は127.0.0.1を使用（IPv6の問題を回避）
+# Docker実行時は "postgres" （サービス名）を使用
+host = "127.0.0.1"
+port = 5432
+user = "postgres"
+password = "postgres"
+dbname = "incident_bot"
+sslmode = "disable"
