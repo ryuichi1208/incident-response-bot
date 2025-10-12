@@ -121,6 +121,8 @@ func main() {
 							handleAssignHandler(api, callback)
 						case "update_incident":
 							handleUpdateIncident(api, callback)
+						case "resolve_incident":
+							handleResolveIncident(api, callback)
 						}
 					}
 				case slack.InteractionTypeViewSubmission:

@@ -381,3 +381,54 @@ func getUpdateHistory(incidentID int64, limit int) ([]map[string]interface{}, er
 
 	return history, nil
 }
+
+// resolveIncident はインシデントを復旧済みにする
+func resolveIncident(incidentID int64, resolvedBy, resolvedByName string) error {
+	if db == nil {
+		return fmt.Errorf("データベース接続が初期化されていません")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("トランザクション開始エラー: %v", err)
+	}
+	defer tx.Rollback()
+
+	// インシデントのステータスを更新
+	updateQuery := `
+		UPDATE incidents
+		SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1 AND status = 'open'
+	`
+	result, err := tx.Exec(updateQuery, incidentID)
+	if err != nil {
+		return fmt.Errorf("インシデント復旧更新エラー: %v", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("更新行数取得エラー: %v", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("インシデント %d は既に復旧済みか存在しません", incidentID)
+	}
+
+	// ステータス変更履歴を記録
+	historyQuery := `
+		INSERT INTO incident_status_history (incident_id, old_status, new_status, changed_by, note)
+		VALUES ($1, 'open', 'resolved', $2, $3)
+	`
+	note := fmt.Sprintf("%s により復旧完了", resolvedByName)
+	_, err = tx.Exec(historyQuery, incidentID, resolvedBy, note)
+	if err != nil {
+		return fmt.Errorf("ステータス履歴記録エラー: %v", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("トランザクションコミットエラー: %v", err)
+	}
+
+	log.Printf("インシデント %d を復旧済みに更新しました (復旧者: %s)", incidentID, resolvedByName)
+	return nil
+}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -43,9 +42,22 @@ func handleAppMention(api *slack.Client, event *slackevents.AppMentionEvent) {
 		log.Printf("チャンネル情報取得エラー: %v", err)
 	}
 
-	// インシデントチャンネル（incident-で始まる）の場合はhelpを表示
+	// インシデントチャンネル（incident-で始まる）の場合は操作ボタンを表示
 	if channel != nil && strings.HasPrefix(channel.Name, "incident-") {
-		showHelp(api, event.Channel)
+		// インシデントIDを取得
+		incidentID, _, err := getIncidentByChannelID(event.Channel)
+		if err != nil {
+			log.Printf("インシデント取得エラー: %v", err)
+			showHelp(api, event.Channel)
+			return
+		}
+
+		// ハンドラーボタンを表示
+		postHandlerButton(api, event.Channel, incidentID)
+
+		// インシデント操作ボタンを表示
+		postIncidentActionsButton(api, event.Channel, incidentID)
+
 		return
 	}
 
@@ -214,9 +226,24 @@ func postIncidentActionsButton(api *slack.Client, channelID string, incidentID i
 	)
 	updateButton.Style = slack.StylePrimary
 
+	// 復旧ボタン
+	resolveButton := slack.NewButtonBlockElement(
+		"resolve_incident",
+		fmt.Sprintf("incident_%d", incidentID),
+		slack.NewTextBlockObject("plain_text", "✅ 復旧完了", true, false),
+	)
+	resolveButton.Style = "primary"
+	resolveButton.Confirm = &slack.ConfirmationBlockObject{
+		Title:   slack.NewTextBlockObject("plain_text", "復旧完了の確認", false, false),
+		Text:    slack.NewTextBlockObject("mrkdwn", "このインシデントを復旧済みにしますか？\n復旧通知が全体周知チャンネルに送信されます。", false, false),
+		Confirm: slack.NewTextBlockObject("plain_text", "復旧完了", false, false),
+		Deny:    slack.NewTextBlockObject("plain_text", "キャンセル", false, false),
+	}
+
 	actionBlock := slack.NewActionBlock(
 		fmt.Sprintf("incident_actions_%d", incidentID),
 		updateButton,
+		resolveButton,
 	)
 
 	headerText := slack.NewTextBlockObject("mrkdwn", "インシデント情報を管理:", false, false)
@@ -272,8 +299,114 @@ func handleUpdateIncident(api *slack.Client, callback slack.InteractionCallback)
 	log.Println("インシデント更新モーダルを表示しました")
 }
 
-// postToAnnouncementChannels は全体周知チャンネルにメッセージを投稿
-func postToAnnouncementChannels(api *slack.Client, message string, incidentChannelID string) {
+// handleResolveIncident はインシデント復旧ボタンがクリックされた時の処理
+func handleResolveIncident(api *slack.Client, callback slack.InteractionCallback) {
+	log.Println("インシデント復旧ボタンがクリックされました")
+
+	// ボタンのValueからインシデントIDを取得
+	action := callback.ActionCallback.BlockActions[0]
+	var incidentID int64
+	_, err := fmt.Sscanf(action.Value, "incident_%d", &incidentID)
+	if err != nil {
+		log.Printf("インシデントID解析エラー: %v", err)
+		return
+	}
+
+	// インシデント詳細を取得
+	details, err := getIncidentDetails(incidentID)
+	if err != nil {
+		log.Printf("インシデント詳細取得エラー: %v", err)
+		api.PostEphemeral(
+			callback.Channel.ID,
+			callback.User.ID,
+			slack.MsgOptionText(fmt.Sprintf("❌ インシデント情報の取得に失敗しました: %v", err), false),
+		)
+		return
+	}
+
+	// ユーザー情報を取得
+	user, err := api.GetUserInfo(callback.User.ID)
+	resolvedByName := callback.User.Name
+	if err == nil && user.RealName != "" {
+		resolvedByName = user.RealName
+	}
+
+	// インシデントを復旧済みにする
+	err = resolveIncident(incidentID, callback.User.ID, resolvedByName)
+	if err != nil {
+		log.Printf("インシデント復旧エラー: %v", err)
+		api.PostEphemeral(
+			callback.Channel.ID,
+			callback.User.ID,
+			slack.MsgOptionText(fmt.Sprintf("❌ インシデントの復旧に失敗しました: %v", err), false),
+		)
+		return
+	}
+
+	// 重要度に応じた絵文字
+	severityEmoji := map[string]string{
+		"critical": "🔴",
+		"high":     "🟠",
+		"medium":   "🟡",
+		"low":      "🟢",
+	}
+	emoji := severityEmoji[details["severity"].(string)]
+
+	// 復旧メッセージを構築
+	resolveMessage := fmt.Sprintf(
+		"✅ *インシデントが復旧しました*\n\n"+
+			"%s *タイトル:* %s\n"+
+			"*重要度:* %s %s\n"+
+			"*復旧者:* <@%s>\n"+
+			"*インシデントID:* #%d\n"+
+			"*チャンネル:* <#%s>",
+		emoji,
+		details["title"].(string),
+		emoji,
+		details["severity"].(string),
+		callback.User.ID,
+		incidentID,
+		callback.Channel.ID,
+	)
+
+	// インシデントチャンネルに復旧メッセージを投稿（緑の縦棒）
+	attachment := slack.Attachment{
+		Color: "good", // 緑色の縦棒
+		Text:  resolveMessage,
+	}
+
+	_, _, err = api.PostMessage(
+		callback.Channel.ID,
+		slack.MsgOptionText("インシデントが復旧しました", false),
+		slack.MsgOptionAttachments(attachment),
+	)
+
+	if err != nil {
+		log.Printf("復旧メッセージ投稿エラー: %v", err)
+	} else {
+		log.Printf("インシデント %d の復旧をチャンネルに通知しました", incidentID)
+	}
+
+	// 全体周知チャンネルに復旧通知を送信（緑の縦棒付き）
+	if config.Channels.EnableAnnouncement && len(config.Channels.AnnouncementChannels) > 0 {
+		log.Println("全体周知チャンネルに復旧通知を送信します")
+		postResolveToAnnouncementChannels(api, resolveMessage, callback.Channel.ID)
+	}
+}
+
+// postToAnnouncementChannels は全体周知チャンネルにメッセージを投稿（赤/黄色の縦棒）
+func postToAnnouncementChannels(api *slack.Client, message string, incidentChannelID string, severity string) {
+	// 重要度に応じた色を決定
+	var color string
+	switch severity {
+	case "critical", "high":
+		color = "danger" // 赤色
+	case "medium":
+		color = "warning" // 黄色
+	default:
+		color = "#439FE0" // 青色（低重要度）
+	}
+
 	for _, channelID := range config.Channels.AnnouncementChannels {
 		if channelID == "" {
 			continue
@@ -287,21 +420,57 @@ func postToAnnouncementChannels(api *slack.Client, message string, incidentChann
 			announcementMessage = fmt.Sprintf("%s\n\n📋 *対応チャンネル:* <#%s>", message, incidentChannelID)
 		}
 
+		// アタッチメントを使用して色付き縦棒で投稿
+		attachment := slack.Attachment{
+			Color: color,
+			Text:  announcementMessage,
+		}
+
 		_, _, err := api.PostMessage(
 			channelID,
-			slack.MsgOptionText(announcementMessage, false),
-			slack.MsgOptionBlocks(
-				slack.NewSectionBlock(
-					slack.NewTextBlockObject("mrkdwn", announcementMessage, false, false),
-					nil, nil,
-				),
-			),
+			slack.MsgOptionText("インシデント通知", false),
+			slack.MsgOptionAttachments(attachment),
 		)
 
 		if err != nil {
 			log.Printf("全体周知チャンネル %s への投稿エラー: %v", channelID, err)
 		} else {
 			log.Printf("全体周知チャンネル %s に投稿しました", channelID)
+		}
+	}
+}
+
+// postResolveToAnnouncementChannels は全体周知チャンネルに復旧通知を投稿（緑の縦棒）
+func postResolveToAnnouncementChannels(api *slack.Client, message string, incidentChannelID string) {
+	for _, channelID := range config.Channels.AnnouncementChannels {
+		if channelID == "" {
+			continue
+		}
+
+		log.Printf("全体周知チャンネル %s に復旧通知を投稿中...", channelID)
+
+		// インシデントチャンネルのリンクを追加
+		announcementMessage := message
+		if incidentChannelID != "" {
+			announcementMessage = fmt.Sprintf("%s\n\n📋 *対応チャンネル:* <#%s>", message, incidentChannelID)
+		}
+
+		// 緑色の縦棒で投稿
+		attachment := slack.Attachment{
+			Color: "good", // 緑色
+			Text:  announcementMessage,
+		}
+
+		_, _, err := api.PostMessage(
+			channelID,
+			slack.MsgOptionText("インシデント復旧通知", false),
+			slack.MsgOptionAttachments(attachment),
+		)
+
+		if err != nil {
+			log.Printf("全体周知チャンネル %s への復旧通知投稿エラー: %v", channelID, err)
+		} else {
+			log.Printf("全体周知チャンネル %s に復旧通知を投稿しました", channelID)
 		}
 	}
 }

@@ -213,7 +213,7 @@ func handleModalSubmission(api *slack.Client, callback slack.InteractionCallback
 
 	if config.Channels.EnableAnnouncement && len(config.Channels.AnnouncementChannels) > 0 {
 		log.Println("全体周知チャンネルへの投稿を開始します")
-		postToAnnouncementChannels(api, reportMessage, incidentChannelID)
+		postToAnnouncementChannels(api, reportMessage, incidentChannelID, severity)
 	} else {
 		if !config.Channels.EnableAnnouncement {
 			log.Println("全体周知機能が無効になっています")
