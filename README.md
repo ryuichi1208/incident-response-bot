@@ -41,7 +41,7 @@ make logs-bot
 
 - Go 1.21以上
 - Slack Appの作成とトークンの取得
-- PostgreSQL 12以上（オプション：インシデント管理機能を使用する場合）
+- Azure App ServiceとSQL Serverが今のところ必須
 
 ## Slack Appの設定
 
