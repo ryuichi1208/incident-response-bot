@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/BurntSushi/toml v1.3.2
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.11.0
 	github.com/slack-go/slack v0.12.3
 )
 
