@@ -1,7 +1,7 @@
 services:
   # PostgreSQLデータベース
   postgres:
-    image: postgres:18-alpine
+    image: postgres:19-alpine
     container_name: incident-bot-postgres
     environment:
       POSTGRES_USER: postgres
